@@ -1,7 +1,6 @@
 """
 MEXC ULTIMATE AI TRADING MENTOR - Complete Professional System
-Scans ALL coins | Finds A1 Setups | Custom Strategies | Teaches Trading | Profit Calculator
-100% FREE - No API Keys Required!
+NO SCIPY REQUIRED! 100% Pure Python
 """
 
 import streamlit as st
@@ -15,15 +14,13 @@ import time
 import sqlite3
 import json
 from typing import Dict, List, Tuple, Optional
-from scipy import stats
-from scipy.signal import find_peaks
-from sklearn.cluster import KMeans
 import warnings
 warnings.filterwarnings('ignore')
 
 # Machine Learning
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
 
 # Technical Analysis
 import ta
@@ -125,6 +122,14 @@ st.markdown("""
         padding: 5px 10px;
         border-radius: 5px;
         font-weight: bold;
+    }
+    .stats-card {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 20px;
+        border-radius: 15px;
+        color: white;
+        text-align: center;
+        margin: 10px 0;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -256,7 +261,6 @@ def init_database():
          • Volume > average (1.5x, 2x, etc.)
          • MACD crossover (bullish/bearish)
          • Support/Resistance proximity
-         • Trendline touches
          • Candlestick patterns
          • Breakout detection
          • Multiple timeframe alignment
@@ -281,7 +285,7 @@ def init_database():
         INSERT OR IGNORE INTO strategies (name, description, conditions, created_at)
         VALUES (?, ?, ?, ?)
     ''', ('A1 Default', 'High probability A1 setups', 
-          '{"timeframe_alignment": true, "min_touches": 3, "volume_ratio": 1.5, "min_rr": 2.0}',
+          json.dumps({"timeframe_alignment": True, "min_touches": 3, "volume_ratio": 1.5, "min_rr": 2.0}),
           datetime.now()))
     
     conn.commit()
@@ -343,18 +347,18 @@ class MEXCDataFetcher:
             df['macd_diff'] = macd.macd_diff()
             
             return df
-        except:
+        except Exception as e:
             return None
 
 # ============================================================================
-# SUPPORT/RESISTANCE DETECTOR
+# SUPPORT/RESISTANCE DETECTOR (PURE NUMPY - NO SCIPY)
 # ============================================================================
 
 class SupportResistanceDetector:
-    """Advanced Support/Resistance detection"""
+    """Advanced Support/Resistance detection using pure NumPy"""
     
     def find_swing_points(self, df: pd.DataFrame, window: int = 5):
-        """Find swing highs and lows"""
+        """Find swing highs and lows using pure NumPy"""
         highs = df['h'].values
         lows = df['l'].values
         
@@ -362,9 +366,22 @@ class SupportResistanceDetector:
         swing_lows = []
         
         for i in range(window, len(df) - window):
-            if highs[i] == max(highs[i-window:i+window+1]):
+            # Check if current high is highest in window
+            is_swing_high = True
+            for j in range(i - window, i + window + 1):
+                if j != i and highs[j] >= highs[i]:
+                    is_swing_high = False
+                    break
+            if is_swing_high:
                 swing_highs.append((i, highs[i]))
-            if lows[i] == min(lows[i-window:i+window+1]):
+            
+            # Check if current low is lowest in window
+            is_swing_low = True
+            for j in range(i - window, i + window + 1):
+                if j != i and lows[j] <= lows[i]:
+                    is_swing_low = False
+                    break
+            if is_swing_low:
                 swing_lows.append((i, lows[i]))
         
         return swing_highs, swing_lows
@@ -377,28 +394,37 @@ class SupportResistanceDetector:
         resistance_prices = [level[1] for level in swing_highs]
         support_prices = [level[1] for level in swing_lows]
         
-        # Cluster levels
-        def cluster_levels(prices, n_clusters=5):
-            if len(prices) < n_clusters:
-                return [{'price': p, 'touches': 1} for p in prices]
+        # Simple clustering without scipy
+        def simple_cluster(prices, tolerance=0.02):
+            if not prices:
+                return []
             
-            prices = np.array(prices).reshape(-1, 1)
-            kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-            clusters = kmeans.fit_predict(prices)
+            prices = sorted(prices)
+            clusters = []
+            current_cluster = [prices[0]]
             
+            for price in prices[1:]:
+                if abs(price - np.mean(current_cluster)) / np.mean(current_cluster) < tolerance:
+                    current_cluster.append(price)
+                else:
+                    clusters.append(current_cluster)
+                    current_cluster = [price]
+            
+            if current_cluster:
+                clusters.append(current_cluster)
+            
+            # Create levels from clusters
             levels = []
-            for i in range(n_clusters):
-                cluster_prices = prices[clusters == i]
-                if len(cluster_prices) > 0:
-                    levels.append({
-                        'price': float(np.mean(cluster_prices)),
-                        'touches': len(cluster_prices)
-                    })
+            for cluster in clusters:
+                levels.append({
+                    'price': float(np.mean(cluster)),
+                    'touches': len(cluster)
+                })
             
-            return sorted(levels, key=lambda x: x['price'])
+            return levels
         
-        resistance_levels = cluster_levels(resistance_prices)
-        support_levels = cluster_levels(support_prices)
+        resistance_levels = simple_cluster(resistance_prices)
+        support_levels = simple_cluster(support_prices)
         
         current_price = df['c'].iloc[-1]
         
@@ -439,7 +465,7 @@ class BreakoutDetector:
         prev_price = df['c'].iloc[-2]
         current_volume = df['v'].iloc[-1]
         avg_volume = df['v'].tail(20).mean()
-        volume_ratio = current_volume / avg_volume
+        volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1
         
         breakouts = {
             'resistance_breakout': False,
@@ -450,7 +476,8 @@ class BreakoutDetector:
             'strength': 0,
             'type': None,
             'level': None,
-            'target': None
+            'target': None,
+            'current_price': current_price
         }
         
         # Check resistance breakout
@@ -460,7 +487,10 @@ class BreakoutDetector:
                 breakouts['resistance_breakout'] = True
                 breakouts['type'] = 'RESISTANCE BREAKOUT (BULLISH)'
                 breakouts['level'] = resistance
-                breakouts['target'] = resistance + (resistance - levels['nearest_support']['price']) if levels['nearest_support'] else current_price * 1.05
+                if levels['nearest_support']:
+                    breakouts['target'] = resistance + (resistance - levels['nearest_support']['price'])
+                else:
+                    breakouts['target'] = current_price * 1.05
                 breakouts['strength'] += 30
         
         # Check support breakdown
@@ -470,7 +500,10 @@ class BreakoutDetector:
                 breakouts['support_breakdown'] = True
                 breakouts['type'] = 'SUPPORT BREAKDOWN (BEARISH)'
                 breakouts['level'] = support
-                breakouts['target'] = support - (levels['nearest_resistance']['price'] - support) if levels['nearest_resistance'] else current_price * 0.95
+                if levels['nearest_resistance']:
+                    breakouts['target'] = support - (levels['nearest_resistance']['price'] - support)
+                else:
+                    breakouts['target'] = current_price * 0.95
                 breakouts['strength'] += 30
         
         # Volume confirmation boost
@@ -480,16 +513,6 @@ class BreakoutDetector:
         # Check if it's a valid breakout
         if breakouts['resistance_breakout'] or breakouts['support_breakdown']:
             breakouts['strength'] = min(breakouts['strength'], 100)
-            
-            # Add to database
-            conn = st.session_state.db
-            c = conn.cursor()
-            c.execute('''
-                INSERT INTO breakouts (symbol, breakout_type, level_price, current_price, volume_confirmed, detected_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-            ''', ('TEMP', breakouts['type'], breakouts['level'], current_price, 
-                  int(breakouts['volume_confirmed']), datetime.now()))
-            conn.commit()
         
         return breakouts
 
@@ -499,16 +522,6 @@ class BreakoutDetector:
 
 class A1SetupDetector:
     """Detect high probability A1 trading setups"""
-    
-    def __init__(self):
-        self.required_conditions = [
-            'multiple_timeframe_alignment',
-            'strong_support_resistance',
-            'volume_confirmation',
-            'candlestick_pattern',
-            'optimal_rsi',
-            'good_risk_reward'
-        ]
     
     def detect_candlestick_patterns(self, df: pd.DataFrame) -> List[str]:
         """Detect candlestick patterns"""
@@ -537,13 +550,6 @@ class A1SetupDetector:
             last['o'] > prev['c'] and last['c'] < prev['o']):
             patterns.append("Bearish Engulfing")
         
-        # Morning Star (simplified)
-        if len(df) >= 3:
-            if (df['c'].iloc[-3] < df['o'].iloc[-3] and
-                abs(df['c'].iloc[-2] - df['o'].iloc[-2]) < abs(df['c'].iloc[-3] - df['o'].iloc[-3]) * 0.3 and
-                df['c'].iloc[-1] > df['o'].iloc[-1]):
-                patterns.append("Morning Star")
-        
         return patterns
     
     def is_a1_setup(self, symbol: str, df: pd.DataFrame, levels: Dict) -> Tuple[bool, Dict]:
@@ -567,7 +573,6 @@ class A1SetupDetector:
                 near_support = True
                 score += 30
                 reasons.append(f"Near strong support ({levels['nearest_support']['touches']} touches)")
-                target_levels['entry'] = 'support bounce'
                 target_levels['stop'] = levels['nearest_support']['price'] * 0.98
                 target_levels['target1'] = current * 1.03
                 target_levels['target2'] = current * 1.05
@@ -580,7 +585,6 @@ class A1SetupDetector:
                 near_resistance = True
                 score += 30
                 reasons.append(f"Near strong resistance ({levels['nearest_resistance']['touches']} touches)")
-                target_levels['entry'] = 'resistance rejection'
                 target_levels['stop'] = levels['nearest_resistance']['price'] * 1.02
                 target_levels['target1'] = current * 0.97
                 target_levels['target2'] = current * 0.95
@@ -683,11 +687,11 @@ class CustomStrategyEngine:
         matches = []
         
         # Price vs MA conditions
-        if 'price_above_ma20' in conditions and conditions['price_above_ma20']:
+        if conditions.get('price_above_ma20'):
             if df['c'].iloc[-1] > df['sma_20'].iloc[-1]:
                 matches.append("Price > MA20")
         
-        if 'price_above_ma50' in conditions and conditions['price_above_ma50']:
+        if conditions.get('price_above_ma50'):
             if df['c'].iloc[-1] > df['sma_50'].iloc[-1]:
                 matches.append("Price > MA50")
         
@@ -706,24 +710,24 @@ class CustomStrategyEngine:
                 matches.append(f"Volume {df['volume_ratio'].iloc[-1]:.1f}x average")
         
         # Support/Resistance conditions
-        if 'near_support' in conditions and conditions['near_support']:
+        if conditions.get('near_support'):
             if levels['nearest_support']:
                 dist = (df['c'].iloc[-1] - levels['nearest_support']['price']) / df['c'].iloc[-1] * 100
                 if 0 <= dist < 2:
                     matches.append("Near support")
         
-        if 'near_resistance' in conditions and conditions['near_resistance']:
+        if conditions.get('near_resistance'):
             if levels['nearest_resistance']:
                 dist = (levels['nearest_resistance']['price'] - df['c'].iloc[-1]) / df['c'].iloc[-1] * 100
                 if 0 <= dist < 2:
                     matches.append("Near resistance")
         
         # MACD conditions
-        if 'macd_bullish' in conditions and conditions['macd_bullish']:
+        if conditions.get('macd_bullish'):
             if df['macd'].iloc[-1] > df['macd_signal'].iloc[-1]:
                 matches.append("MACD bullish")
         
-        if 'macd_bearish' in conditions and conditions['macd_bearish']:
+        if conditions.get('macd_bearish'):
             if df['macd'].iloc[-1] < df['macd_signal'].iloc[-1]:
                 matches.append("MACD bearish")
         
@@ -753,8 +757,11 @@ class MarketScanner:
         progress_bar = st.progress(0)
         status_text = st.empty()
         
-        for i, symbol in enumerate(symbols[:50]):  # Limit for performance
-            status_text.text(f"Scanning {i+1}/{len(symbols[:50])}: {symbol}")
+        # Limit to 30 for performance on free tier
+        scan_symbols = symbols[:30]
+        
+        for i, symbol in enumerate(scan_symbols):
+            status_text.text(f"Scanning {i+1}/{len(scan_symbols)}: {symbol}")
             
             df = self.data_fetcher.get_historical_data(symbol, limit=200)
             if df is None or len(df) < 50:
@@ -788,14 +795,14 @@ class MarketScanner:
             # Filter by scan type
             if scan_type == 'a1' and is_a1:
                 results.append(signal)
-            elif scan_type == 'breakout' and breakouts['resistance_breakout'] or breakouts['support_breakdown']:
+            elif scan_type == 'breakout' and (breakouts['resistance_breakout'] or breakouts['support_breakdown']):
                 results.append(signal)
             elif scan_type == 'all':
                 results.append(signal)
             elif scan_type == 'custom' and custom_strategy and signal.get('strategy_match'):
                 results.append(signal)
             
-            progress_bar.progress((i + 1) / len(symbols[:50]))
+            progress_bar.progress((i + 1) / len(scan_symbols))
         
         status_text.empty()
         progress_bar.empty()
@@ -960,27 +967,27 @@ with st.sidebar:
         
         min_conditions = st.slider("Minimum conditions to match", 1, 5, 2)
         
-        if st.button("💾 Save Strategy", use_container_width=True):
-            strategy = {
-                'name': 'Custom Strategy',
-                'description': 'User-defined strategy',
-                'conditions': {
-                    'price_above_ma20': price_above_ma20,
-                    'price_above_ma50': price_above_ma50,
-                    'rsi_min': rsi_min,
-                    'rsi_max': rsi_max,
-                    'volume_ratio_min': volume_min,
-                    'near_support': near_support,
-                    'near_resistance': near_resistance,
-                    'macd_bullish': macd_bullish,
-                    'macd_bearish': macd_bearish,
-                    'min_matches': min_conditions
-                }
+        # Store strategy in session state
+        st.session_state.custom_strategy = {
+            'conditions': {
+                'price_above_ma20': price_above_ma20,
+                'price_above_ma50': price_above_ma50,
+                'rsi_min': rsi_min,
+                'rsi_max': rsi_max,
+                'volume_ratio_min': volume_min,
+                'near_support': near_support,
+                'near_resistance': near_resistance,
+                'macd_bullish': macd_bullish,
+                'macd_bearish': macd_bearish,
+                'min_matches': min_conditions
             }
+        }
+        
+        if st.button("💾 Save Strategy", use_container_width=True):
             st.session_state.strategy_engine.save_strategy(
                 f"Custom_{datetime.now().strftime('%Y%m%d_%H%M')}",
                 "User created strategy",
-                strategy['conditions']
+                st.session_state.custom_strategy['conditions']
             )
             st.success("Strategy saved!")
     
@@ -1010,10 +1017,29 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 # ============================================================================
 
 with tab1:
-    st.subheader("🔍 Live Market Scanner - Scanning ALL MEXC Coins")
+    st.subheader("🔍 Live Market Scanner - Scanning MEXC Coins")
+    
+    # Stats overview
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.markdown('<div class="stats-card">', unsafe_allow_html=True)
+        st.metric("Total Coins", len(all_symbols))
+        st.markdown('</div>', unsafe_allow_html=True)
+    with col2:
+        st.markdown('<div class="stats-card">', unsafe_allow_html=True)
+        st.metric("Scan Limit", "30 coins")
+        st.markdown('</div>', unsafe_allow_html=True)
+    with col3:
+        st.markdown('<div class="stats-card">', unsafe_allow_html=True)
+        st.metric("A1 Setups", len([r for r in st.session_state.scanner_results if r.get('is_a1')]) if st.session_state.scanner_results else 0)
+        st.markdown('</div>', unsafe_allow_html=True)
+    with col4:
+        st.markdown('<div class="stats-card">', unsafe_allow_html=True)
+        st.metric("Breakouts", len([r for r in st.session_state.scanner_results if r.get('breakout', {}).get('type')]) if st.session_state.scanner_results else 0)
+        st.markdown('</div>', unsafe_allow_html=True)
     
     if 'scanning' in st.session_state and st.session_state.scanning:
-        with st.spinner("Scanning all coins... This may take a minute"):
+        with st.spinner("Scanning coins... This may take a minute"):
             
             # Determine scan parameters
             scan_type_map = {
@@ -1023,22 +1049,7 @@ with tab1:
                 "⚙️ Custom Strategy": 'custom'
             }
             
-            custom_strategy = None
-            if scan_type == "⚙️ Custom Strategy":
-                custom_strategy = {
-                    'conditions': {
-                        'price_above_ma20': price_above_ma20,
-                        'price_above_ma50': price_above_ma50,
-                        'rsi_min': rsi_min,
-                        'rsi_max': rsi_max,
-                        'volume_ratio_min': volume_min,
-                        'near_support': near_support,
-                        'near_resistance': near_resistance,
-                        'macd_bullish': macd_bullish,
-                        'macd_bearish': macd_bearish,
-                        'min_matches': min_conditions
-                    }
-                }
+            custom_strategy = st.session_state.get('custom_strategy') if scan_type == "⚙️ Custom Strategy" else None
             
             results = st.session_state.scanner.scan_all(
                 all_symbols,
@@ -1048,28 +1059,13 @@ with tab1:
             
             st.session_state.scanner_results = results
             st.session_state.scanning = False
+            st.rerun()
     
     # Display results
     if st.session_state.scanner_results:
         st.success(f"Found {len(st.session_state.scanner_results)} opportunities!")
         
-        # Summary metrics
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            a1_count = sum(1 for r in st.session_state.scanner_results if r.get('is_a1'))
-            st.metric("A1 Setups", a1_count)
-        with col2:
-            breakout_count = sum(1 for r in st.session_state.scanner_results 
-                               if r.get('breakout', {}).get('resistance_breakout') or r.get('breakout', {}).get('support_breakdown'))
-            st.metric("Breakouts", breakout_count)
-        with col3:
-            avg_rsi = np.mean([r['rsi'] for r in st.session_state.scanner_results]) if st.session_state.scanner_results else 0
-            st.metric("Avg RSI", f"{avg_rsi:.1f}")
-        with col4:
-            st.metric("Coins Scanned", len(all_symbols[:50]))
-        
-        # Display signals
-        for result in st.session_state.scanner_results[:20]:  # Show top 20
+        for result in st.session_state.scanner_results[:10]:  # Show top 10
             signal_class = "signal-a1" if result.get('is_a1') else "signal-long" if result.get('breakout', {}).get('resistance_breakout') else "signal-short"
             
             with st.container():
@@ -1087,7 +1083,7 @@ with tab1:
                 </div>
                 """, unsafe_allow_html=True)
     else:
-        st.info("Click 'START SCAN' to begin scanning all MEXC coins")
+        st.info("Click 'START SCAN' to begin scanning MEXC coins")
 
 # ============================================================================
 # TAB 2: A1 SETUPS
@@ -1103,7 +1099,7 @@ with tab2:
         FROM a1_setups
         WHERE success IS NULL
         ORDER BY detected_at DESC
-        LIMIT 20
+        LIMIT 10
     ''')
     
     a1_setups = c.fetchall()
@@ -1159,7 +1155,7 @@ with tab3:
         FROM breakouts
         WHERE success IS NULL
         ORDER BY detected_at DESC
-        LIMIT 20
+        LIMIT 10
     ''')
     
     breakouts = c.fetchall()
@@ -1249,19 +1245,17 @@ with tab5:
 
 # Footer
 st.divider()
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3 = st.columns(3)
 with col1:
     st.caption(f"Total Coins: {len(all_symbols)}")
 with col2:
     st.caption(f"Signals: {len(st.session_state.scanner_results)}")
 with col3:
-    st.caption(f"Strategies: {len(strategies) if 'strategies' in locals() else 0}")
-with col4:
     st.caption(f"Updated: {datetime.now().strftime('%H:%M:%S')}")
 
 st.markdown("""
 <div style="text-align: center; color: #888; padding: 20px;">
-    <p>🎯 MEXC ULTIMATE TRADING MENTOR - Scans ALL Coins | A1 Setups | Breakouts | Custom Strategies</p>
+    <p>🎯 MEXC ULTIMATE TRADING MENTOR - Scans MEXC Coins | A1 Setups | Breakouts | Custom Strategies</p>
     <p>⚠️ Educational Purposes Only - Always manage risk!</p>
 </div>
 """, unsafe_allow_html=True)
