@@ -1,10 +1,26 @@
-# Core dependencies only - Python 3.13 compatible
+# Core
 streamlit==1.35.0
 pandas==2.2.3
 numpy==1.26.4
 plotly==5.24.1
-ccxt==4.3.15
-scikit-learn==1.5.2
-pillow==10.4.0
 
-# No pyarrow, no protobuf - they cause build issues
+# Free Data Sources
+yfinance==0.2.40
+ccxt==4.3.15
+requests==2.32.3
+beautifulsoup4==4.12.3
+
+# Machine Learning
+scikit-learn==1.5.2
+xgboost==2.0.3
+
+# Technical Analysis
+ta==0.11.0
+
+# Database (self-learning memory)
+sqlite3
+pickle5==0.0.12
+
+# Utilities
+python-dateutil==2.9.0
+pytz==2024.1
